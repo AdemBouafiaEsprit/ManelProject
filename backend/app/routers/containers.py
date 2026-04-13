@@ -1,0 +1,172 @@
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, func, desc
+from datetime import datetime, timezone, timedelta
+from typing import Optional
+from uuid import UUID
+from app.core.database import get_db
+from app.models.container import Container
+from app.models.sensor import SensorReading
+from app.models.risk_score import RiskScore
+from app.models.alert import Alert
+from app.schemas.schemas import ContainerOut, ContainerUpdate, ContainerCreate, SensorReadingOut, RiskScoreOut
+from app.routers.auth import get_current_user, require_role
+from app.models.user import User
+
+router = APIRouter(prefix="/containers", tags=["Containers"])
+
+
+async def _enrich_container(container: Container, db: AsyncSession) -> dict:
+    """Add latest reading, risk score and alert count to container dict."""
+    c = container.__dict__.copy()
+
+    # Latest sensor reading
+    res = await db.execute(
+        select(SensorReading)
+        .where(SensorReading.container_id == container.id)
+        .order_by(desc(SensorReading.time))
+        .limit(1)
+    )
+    latest = res.scalar_one_or_none()
+    c["latest_reading"] = SensorReadingOut.model_validate(latest) if latest else None
+
+    # Latest risk score
+    res2 = await db.execute(
+        select(RiskScore)
+        .where(RiskScore.container_id == container.id)
+        .order_by(desc(RiskScore.scored_at))
+        .limit(1)
+    )
+    risk = res2.scalar_one_or_none()
+    c["latest_risk"] = RiskScoreOut.model_validate(risk) if risk else None
+
+    # Active alerts count
+    res3 = await db.execute(
+        select(func.count()).where(
+            Alert.container_id == container.id,
+            Alert.is_active == True,
+        )
+    )
+    c["active_alerts_count"] = res3.scalar() or 0
+    return c
+
+
+@router.get("", response_model=list[ContainerOut])
+async def list_containers(
+    status: Optional[str] = None,
+    block: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    q = select(Container)
+    if status:
+        q = q.where(Container.status == status)
+    if block:
+        q = q.where(Container.block == block)
+    q = q.order_by(Container.container_number)
+    result = await db.execute(q)
+    containers = result.scalars().all()
+    enriched = [await _enrich_container(c, db) for c in containers]
+    return [ContainerOut.model_validate(e) for e in enriched]
+
+
+@router.get("/{container_id}", response_model=ContainerOut)
+async def get_container(
+    container_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    result = await db.execute(select(Container).where(Container.id == container_id))
+    container = result.scalar_one_or_none()
+    if not container:
+        raise HTTPException(status_code=404, detail="Container not found")
+    return ContainerOut.model_validate(await _enrich_container(container, db))
+
+
+@router.get("/{container_id}/history", response_model=list[SensorReadingOut])
+async def get_container_history(
+    container_id: UUID,
+    hours: int = Query(24, ge=1, le=168),
+    interval: str = Query("raw", description="raw | 1h"),
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+    result = await db.execute(
+        select(SensorReading)
+        .where(
+            SensorReading.container_id == container_id,
+            SensorReading.time >= cutoff,
+        )
+        .order_by(SensorReading.time)
+    )
+    readings = result.scalars().all()
+    # Downsample if many readings
+    if len(readings) > 500:
+        step = len(readings) // 500
+        readings = readings[::step]
+    return [SensorReadingOut.model_validate(r) for r in readings]
+
+
+@router.get("/{container_id}/risk", response_model=RiskScoreOut)
+async def get_container_risk(
+    container_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    result = await db.execute(
+        select(RiskScore)
+        .where(RiskScore.container_id == container_id)
+        .order_by(desc(RiskScore.scored_at))
+        .limit(1)
+    )
+    risk = result.scalar_one_or_none()
+    if not risk:
+        raise HTTPException(status_code=404, detail="No risk score available")
+    return RiskScoreOut.model_validate(risk)
+
+
+@router.put("/{container_id}/status", response_model=ContainerOut)
+async def update_container_status(
+    container_id: UUID,
+    update: ContainerUpdate,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(require_role("admin", "supervisor")),
+):
+    result = await db.execute(select(Container).where(Container.id == container_id))
+    container = result.scalar_one_or_none()
+    if not container:
+        raise HTTPException(status_code=404, detail="Container not found")
+    if update.status:
+        container.status = update.status
+    if update.block:
+        container.block = update.block
+    await db.commit()
+    return ContainerOut.model_validate(await _enrich_container(container, db))
+
+
+@router.post("", response_model=ContainerOut, status_code=201)
+async def create_container(
+    payload: ContainerCreate,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(require_role("admin", "supervisor")),
+):
+    # Check for existing container number
+    result = await db.execute(
+        select(Container).where(Container.container_number == payload.container_number)
+    )
+    if result.scalar_one_or_none():
+        raise HTTPException(
+            status_code=400,
+            detail=f"Container with number {payload.container_number} already exists",
+        )
+
+    # Create new container record
+    new_container = Container(
+        **payload.model_dump()
+    )
+    db.add(new_container)
+    await db.commit()
+    await db.refresh(new_container)
+
+    return ContainerOut.model_validate(await _enrich_container(new_container, db))

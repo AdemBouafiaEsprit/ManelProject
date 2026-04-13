@@ -1,0 +1,35 @@
+{
+  "num_containers": 25,
+  "simulation_speed": 1,
+  "interval_seconds": 30,
+  "fault_probability": 0.08,
+  "history_days": 30,
+  "scenarios": {
+    "normal": {
+      "temp_drift": 0.1,
+      "humidity_drift": 0.5,
+      "power_noise": 0.02,
+      "voltage_noise": 0.5
+    },
+    "compressor_degradation": {
+      "temp_rise_rate": 0.3,
+      "power_spike": 0.15,
+      "duration_cycles": 40
+    },
+    "door_left_open": {
+      "temp_rise_rate": 0.8,
+      "humidity_rise_rate": 2.0,
+      "duration_cycles": 10
+    },
+    "power_fluctuation": {
+      "voltage_drops": true,
+      "compressor_cycles": true,
+      "duration_cycles": 20
+    },
+    "complete_failure": {
+      "temp_rise_rate": 1.5,
+      "compressor_off": true,
+      "duration_cycles": 20
+    }
+  }
+}

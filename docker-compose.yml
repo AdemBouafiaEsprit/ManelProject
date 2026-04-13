@@ -1,0 +1,95 @@
+
+
+services:
+  db:
+    image: timescale/timescaledb:latest-pg16
+    container_name: reefer_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: reefer_db
+      POSTGRES_USER: reefer_user
+      POSTGRES_PASSWORD: reefer_pass
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./backend/db/init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U reefer_user -d reefer_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: reefer_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: reefer_mqtt
+    restart: unless-stopped
+    volumes:
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf
+      - mqttdata:/mosquitto/data
+      - mqttlogs:/mosquitto/log
+    ports:
+      - "1883:1883"
+      - "9001:9001"
+
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: reefer_api
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      mosquitto:
+        condition: service_started
+    environment:
+      DATABASE_URL: postgresql+asyncpg://reefer_user:reefer_pass@db:5432/reefer_db
+      REDIS_URL: redis://redis:6379
+      MQTT_BROKER_HOST: mosquitto
+      MQTT_BROKER_PORT: "1883"
+      SECRET_KEY: stam-reefer-super-secret-jwt-key-2024
+      ALGORITHM: HS256
+      ACCESS_TOKEN_EXPIRE_MINUTES: "480"
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  simulator:
+    build:
+      context: ./simulator
+      dockerfile: Dockerfile
+    container_name: reefer_simulator
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      mosquitto:
+        condition: service_started
+    environment:
+      MQTT_BROKER_HOST: mosquitto
+      MQTT_BROKER_PORT: "1883"
+      DATABASE_URL: postgresql://reefer_user:reefer_pass@db:5432/reefer_db
+      PYTHONDONTWRITEBYTECODE: "1"
+    command: python simulator.py --seed-history --then-realtime
+
+volumes:
+  pgdata:
+  mqttdata:
+  mqttlogs:
