@@ -58,6 +58,56 @@ import { KPISummary } from '../../shared/models/models';
     </div>
   </div>
 
+  <!-- Risk Trend -->
+  <div class="card mb-6">
+    <div class="card-header">
+      <span class="card-title">Risk Score Trend (7 Days)</span>
+      <div class="flex gap-2">
+        <button *ngFor="let d of [7,14,30]" class="btn btn-ghost btn-sm"
+          [class.active-btn]="trendDays() === d" (click)="loadRiskTrend(d)">{{ d }}d</button>
+      </div>
+    </div>
+    <div class="card-body" style="padding-top:0">
+      <apx-chart *ngIf="trendChart"
+        [series]="trendChart.series!" [chart]="trendChart.chart!"
+        [xaxis]="trendChart.xaxis!" [yaxis]="trendChart.yaxis!"
+        [stroke]="trendChart.stroke!" [fill]="trendChart.fill!"
+        [colors]="trendChart.colors!" [grid]="trendChart.grid!">
+      </apx-chart>
+      <div *ngIf="!trendChart" class="skeleton chart-container"></div>
+    </div>
+  </div>
+
+  <!-- Block Summary -->
+  <div class="card mb-6">
+    <div class="card-header"><span class="card-title">Block Summary</span></div>
+    <div class="card-body" style="padding:0">
+      <table class="data-table">
+        <thead><tr><th>Block</th><th>Containers</th><th>Avg Risk</th><th>Active Alerts</th></tr></thead>
+        <tbody>
+          <tr *ngFor="let b of blockSummary()">
+            <td><span class="block-badge-sm">{{ b.block }}</span></td>
+            <td>{{ b.containers }}</td>
+            <td>
+              <span class="risk-badge" [class.CRITICAL]="b.avg_risk_score > 70"
+                [class.HIGH]="b.avg_risk_score > 50 && b.avg_risk_score <= 70"
+                [class.MEDIUM]="b.avg_risk_score > 25 && b.avg_risk_score <= 50"
+                [class.LOW]="b.avg_risk_score <= 25">
+                {{ b.avg_risk_score }}
+              </span>
+            </td>
+            <td>
+              <span [style.color]="b.active_alerts > 0 ? '#DC2626' : '#22C55E'" style="font-weight:700">
+                {{ b.active_alerts }}
+              </span>
+            </td>
+          </tr>
+          <tr *ngIf="blockSummary().length===0"><td colspan="4" class="text-center text-muted p-4">No data</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
   <div class="grid-2">
     <!-- Top problematic -->
     <div class="card">
@@ -100,15 +150,27 @@ import { KPISummary } from '../../shared/models/models';
     </div>
   </div>
 </div>
-  `
+  `,
+  styles: [`
+    .active-btn { background: #003B72 !important; color: white !important; }
+    .block-badge-sm {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 26px; height: 26px; border-radius: 6px; background: #003B72;
+      color: white; font-size: 12px; font-weight: 700;
+    }
+    .chart-container { height: 300px; border-radius: 8px; }
+  `]
 })
 export class AnalyticsComponent implements OnInit {
   kpi = signal<KPISummary | null>(null);
   topContainers = signal<any[]>([]);
   commodityData = signal<any[]>([]);
+  blockSummary = signal<any[]>([]);
+  trendDays = signal(7);
 
   alertsChart: any = null;
   riskChart: any = null;
+  trendChart: any = null;
 
   constructor(private analytics: AnalyticsService) {}
 
@@ -116,6 +178,8 @@ export class AnalyticsComponent implements OnInit {
     this.analytics.getSummary().subscribe(k => this.kpi.set(k));
     this.analytics.getTopProblematic().subscribe(d => this.topContainers.set(d));
     this.analytics.getCommodityPerformance().subscribe(d => this.commodityData.set(d));
+    this.analytics.getBlockSummary().subscribe(d => this.blockSummary.set(d));
+    this.loadRiskTrend(7);
 
     this.analytics.getAlertsOverTime(30).subscribe(data => {
       this.alertsChart = {
@@ -137,6 +201,23 @@ export class AnalyticsComponent implements OnInit {
         plotOptions: {
           pie: { donut: { size: '65%', labels: { show: true, name: {show:true}, value:{show:true} } } }
         }
+      };
+    });
+  }
+
+  loadRiskTrend(days: number) {
+    this.trendDays.set(days);
+    this.trendChart = null;
+    this.analytics.getRiskTrend(days).subscribe(data => {
+      this.trendChart = {
+        series: data.series,
+        chart: { type: 'area', height: 260, toolbar: { show: false } },
+        colors: ['#003B72'],
+        stroke: { curve: 'smooth', width: 2 },
+        fill: { type: 'gradient', gradient: { shadeIntensity: 0.4, opacityFrom: 0.3, opacityTo: 0.02 } },
+        xaxis: { categories: data.categories, type: 'category', labels: { rotate: -30 } },
+        yaxis: { title: { text: 'Risk Score (0–100)' }, min: 0, max: 100 },
+        grid: { borderColor: '#F1F5F9' },
       };
     });
   }

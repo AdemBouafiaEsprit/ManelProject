@@ -1,6 +1,7 @@
 import { Component, OnInit, OnDestroy, signal } from '@angular/core';
 import { RouterOutlet, RouterLink, RouterLinkActive, Router } from '@angular/router';
 import { CommonModule } from '@angular/common';
+import { FormsModule } from '@angular/forms';
 import { Subscription } from 'rxjs';
 import { AuthService } from '../core/auth/auth.service';
 import { WebSocketService } from '../core/websocket/websocket.service';
@@ -9,7 +10,7 @@ import { AlertService } from '../core/api/alert.service';
 @Component({
   selector: 'app-shell',
   standalone: true,
-  imports: [RouterOutlet, RouterLink, RouterLinkActive, CommonModule],
+  imports: [RouterOutlet, RouterLink, RouterLinkActive, CommonModule, FormsModule],
   template: `
     <div class="shell">
       <!-- Sidebar -->
@@ -82,6 +83,17 @@ import { AlertService } from '../core/api/alert.service';
 
       <!-- Main Content -->
       <main class="main-content">
+        <!-- Top bar with global search -->
+        <div class="topbar">
+          <div class="search-wrap">
+            <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#9CA3AF" stroke-width="2">
+              <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+            </svg>
+            <input class="global-search" [(ngModel)]="globalSearch"
+              placeholder="Search containers…"
+              (keydown.enter)="doGlobalSearch()" />
+          </div>
+        </div>
         <router-outlet />
       </main>
     </div>
@@ -144,13 +156,25 @@ import { AlertService } from '../core/api/alert.service';
       &:hover { background: rgba(239,68,68,0.15); color: #EF4444; }
     }
 
-    .main-content { flex: 1; overflow-y: auto; overflow-x: hidden; }
+    .main-content { flex: 1; overflow-y: auto; overflow-x: hidden; display: flex; flex-direction: column; }
+    .topbar {
+      padding: 10px 24px; background: white; border-bottom: 1px solid #E2E8F0;
+      display: flex; align-items: center; gap: 12px; flex-shrink: 0;
+    }
+    .search-wrap { position: relative; width: 260px; }
+    .search-icon { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); pointer-events: none; }
+    .global-search {
+      width: 100%; padding: 7px 12px 7px 34px; border: 1.5px solid #E2E8F0; border-radius: 8px;
+      font-size: 13px; outline: none; background: #F8FAFC; box-sizing: border-box;
+      &:focus { border-color: #003B72; background: white; }
+    }
   `],
 })
 export class ShellComponent implements OnInit, OnDestroy {
   collapsed = signal(false);
   wsConnected = signal(false);
   criticalCount = signal(0);
+  globalSearch = '';
 
   private subs: Subscription[] = [];
 
@@ -180,6 +204,11 @@ export class ShellComponent implements OnInit, OnDestroy {
     this.alertService
       .getAll({ severity: 'CRITICAL', is_active: true })
       .subscribe((alerts) => this.criticalCount.set(alerts.length));
+  }
+
+  doGlobalSearch() {
+    if (!this.globalSearch.trim()) return;
+    this.router.navigate(['/containers'], { queryParams: { q: this.globalSearch.trim() } });
   }
 
   toggleSidebar() {

@@ -88,9 +88,12 @@ import { Alert } from '../../shared/models/models';
               <button class="btn btn-ghost btn-sm" (click)="ack(a)" *ngIf="a.is_active && !a.acknowledged_at">
                 Ack
               </button>
-              <button class="btn btn-ghost btn-sm" (click)="resolve(a)" *ngIf="a.is_active">
+              <button class="btn btn-ghost btn-sm" (click)="openResolve(a)" *ngIf="a.is_active">
                 Resolve
               </button>
+            </div>
+            <div *ngIf="!a.is_active && a.resolution_notes" class="res-notes">
+              {{ a.resolution_notes }}
             </div>
           </td>
         </tr>
@@ -101,6 +104,25 @@ import { Alert } from '../../shared/models/models';
     </table>
     <div *ngIf="loading()" class="p-8">
       <div class="skeleton skeleton-row" *ngFor="let i of [1,2,3,4,5]" style="margin-bottom:10px;height:44px;border-radius:6px"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Resolve modal -->
+<div class="modal-backdrop" *ngIf="resolvingAlert()">
+  <div class="modal-box">
+    <h3 class="modal-title">Resolve Alert</h3>
+    <p class="text-xs text-muted mb-3">
+      {{ resolvingAlert()?.message }}
+    </p>
+    <label class="form-label">Resolution Notes (optional)</label>
+    <textarea class="form-input" rows="3" [(ngModel)]="resolveNotes"
+      placeholder="Describe what action was taken..."></textarea>
+    <div class="flex gap-2 mt-4 justify-end">
+      <button class="btn btn-ghost btn-sm" (click)="closeResolve()">Cancel</button>
+      <button class="btn btn-primary btn-sm" (click)="submitResolve()" [disabled]="resolving()">
+        {{ resolving() ? 'Resolving…' : 'Confirm Resolve' }}
+      </button>
     </div>
   </div>
 </div>
@@ -140,6 +162,18 @@ import { Alert } from '../../shared/models/models';
     .resolved-row { opacity: 0.6; }
     .p-8 { padding: 32px; }
     .skeleton-row { height: 44px; }
+    .res-notes { font-size: 11px; color: #64748B; font-style: italic; margin-top: 2px; max-width: 180px; }
+    .modal-backdrop {
+      position: fixed; inset: 0; background: rgba(0,0,0,0.45);
+      display: flex; align-items: center; justify-content: center; z-index: 1000;
+    }
+    .modal-box {
+      background: white; border-radius: 14px; padding: 28px;
+      width: 420px; box-shadow: 0 20px 60px rgba(0,0,0,0.2);
+    }
+    .modal-title { font-size: 16px; font-weight: 700; color: #0F172A; margin-bottom: 12px; }
+    .form-label { display: block; font-size: 12px; font-weight: 600; color: #374151; margin-bottom: 6px; }
+    .form-input { width: 100%; border: 1.5px solid #E2E8F0; border-radius: 8px; padding: 8px 12px; font-size: 13px; outline: none; resize: vertical; box-sizing: border-box; }
   `]
 })
 export class AlertsComponent implements OnInit {
@@ -147,6 +181,9 @@ export class AlertsComponent implements OnInit {
   filtered = signal<Alert[]>([]);
   selected = signal<Set<string>>(new Set());
   loading = signal(true);
+  resolvingAlert = signal<Alert | null>(null);
+  resolving = signal(false);
+  resolveNotes = '';
 
   filterSeverity = '';
   filterActive = '';
@@ -202,8 +239,24 @@ export class AlertsComponent implements OnInit {
     this.alertService.acknowledge(a.id).subscribe(() => this.load());
   }
 
-  resolve(a: Alert) {
-    this.alertService.resolve(a.id).subscribe(() => this.load());
+  openResolve(a: Alert) {
+    this.resolvingAlert.set(a);
+    this.resolveNotes = '';
+  }
+
+  closeResolve() {
+    this.resolvingAlert.set(null);
+    this.resolveNotes = '';
+  }
+
+  submitResolve() {
+    const a = this.resolvingAlert();
+    if (!a) return;
+    this.resolving.set(true);
+    this.alertService.resolve(a.id, this.resolveNotes || undefined).subscribe({
+      next: () => { this.resolving.set(false); this.closeResolve(); this.load(); },
+      error: () => this.resolving.set(false),
+    });
   }
 
   bulkAck() {

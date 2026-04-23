@@ -17,4 +17,5 @@ class Alert(Base):
     acknowledged_at = Column(DateTime(timezone=True))
     acknowledged_by = Column(UUID(as_uuid=True), ForeignKey("users.id"))
     resolved_at = Column(DateTime(timezone=True))
+    resolution_notes = Column(Text, nullable=True)
     is_active = Column(Boolean, default=True)

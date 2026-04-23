@@ -9,8 +9,12 @@ from app.models.container import Container
 from app.models.sensor import SensorReading
 from app.models.risk_score import RiskScore
 from app.models.alert import Alert
-from app.schemas.schemas import ContainerOut, ContainerUpdate, ContainerCreate, ContainerEdit, SensorReadingOut, RiskScoreOut, AlertOut, IncidentReport
-from app.models.alert import Alert
+from app.models.container_event import ContainerEvent
+from app.schemas.schemas import (
+    ContainerOut, ContainerUpdate, ContainerCreate, ContainerEdit,
+    SensorReadingOut, RiskScoreOut, AlertOut, IncidentReport, BulkStatusUpdate,
+    ContainerEventOut,
+)
 from app.routers.auth import get_current_user, require_role
 from app.models.user import User
 
@@ -151,7 +155,7 @@ async def edit_container(
     container_id: UUID,
     update: ContainerEdit,
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(require_role("admin", "supervisor")),
+    current_user: User = Depends(require_role("admin", "supervisor")),
 ):
     result = await db.execute(select(Container).where(Container.id == container_id))
     container = result.scalar_one_or_none()
@@ -178,10 +182,19 @@ async def edit_container(
             )
         container.container_number = update.container_number
 
+    old_status = container.status
     for field in ["owner", "commodity", "target_temp", "tolerance", "status", "block", "row_num", "bay", "tier", "ecp_id"]:
         val = getattr(update, field)
         if val is not None:
             setattr(container, field, val)
+
+    if update.status is not None and update.status != old_status:
+        db.add(ContainerEvent(
+            container_id=container.id,
+            event_type="STATUS_CHANGED",
+            description=f"Status changed from {old_status} to {update.status}.",
+            username=current_user.username,
+        ))
 
     await db.commit()
     return ContainerOut.model_validate(await _enrich_container(container, db))
@@ -192,7 +205,7 @@ async def report_incident(
     container_id: UUID,
     payload: IncidentReport,
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     result = await db.execute(select(Container).where(Container.id == container_id))
     container = result.scalar_one_or_none()
@@ -212,6 +225,12 @@ async def report_incident(
         is_active=True,
     )
     db.add(alert)
+    db.add(ContainerEvent(
+        container_id=container_id,
+        event_type="INCIDENT_REPORTED",
+        description=f"Physical incident reported: {payload.description}",
+        username=current_user.username,
+    ))
     await db.commit()
     await db.refresh(alert)
     return AlertOut.model_validate(alert)
@@ -221,9 +240,8 @@ async def report_incident(
 async def create_container(
     payload: ContainerCreate,
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(require_role("admin", "supervisor")),
+    current_user: User = Depends(require_role("admin", "supervisor")),
 ):
-    # Validate container number format: 4 uppercase letters + 7 digits (e.g. CMAU7821697)
     import re
     if not re.match(r'^[A-Z]{4}\d{7}$', payload.container_number):
         raise HTTPException(
@@ -231,7 +249,6 @@ async def create_container(
             detail="Invalid container number. Required format: 4 letters + 7 digits (e.g. CMAU7821697)",
         )
 
-    # Check for existing container number
     result = await db.execute(
         select(Container).where(Container.container_number == payload.container_number)
     )
@@ -241,12 +258,81 @@ async def create_container(
             detail=f"Container with number {payload.container_number} already exists",
         )
 
-    # Create new container record
-    new_container = Container(
-        **payload.model_dump()
-    )
+    new_container = Container(**payload.model_dump())
     db.add(new_container)
+    await db.flush()
+    db.add(ContainerEvent(
+        container_id=new_container.id,
+        event_type="CREATED",
+        description=f"Container {new_container.container_number} created.",
+        username=current_user.username,
+    ))
     await db.commit()
     await db.refresh(new_container)
 
     return ContainerOut.model_validate(await _enrich_container(new_container, db))
+
+
+@router.post("/bulk-status", status_code=200)
+async def bulk_update_status(
+    payload: BulkStatusUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_role("admin", "supervisor")),
+):
+    result = await db.execute(
+        select(Container).where(Container.id.in_(payload.container_ids))
+    )
+    containers = result.scalars().all()
+    for c in containers:
+        old_status = c.status
+        c.status = payload.status
+        db.add(ContainerEvent(
+            container_id=c.id,
+            event_type="STATUS_CHANGED",
+            description=f"Status changed from {old_status} to {payload.status} (bulk update).",
+            username=current_user.username,
+        ))
+    await db.commit()
+    return {"updated": len(containers)}
+
+
+@router.get("/{container_id}/timeline")
+async def get_container_timeline(
+    container_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    res_events = await db.execute(
+        select(ContainerEvent)
+        .where(ContainerEvent.container_id == container_id)
+        .order_by(desc(ContainerEvent.happened_at))
+    )
+    events = res_events.scalars().all()
+
+    res_alerts = await db.execute(
+        select(Alert)
+        .where(Alert.container_id == container_id)
+        .order_by(desc(Alert.triggered_at))
+    )
+    alerts = res_alerts.scalars().all()
+
+    timeline = []
+    for e in events:
+        timeline.append({
+            "kind": "event",
+            "event_type": e.event_type,
+            "description": e.description,
+            "username": e.username,
+            "happened_at": e.happened_at,
+        })
+    for a in alerts:
+        timeline.append({
+            "kind": "alert",
+            "event_type": a.alert_type,
+            "description": a.message,
+            "username": None,
+            "happened_at": a.triggered_at,
+        })
+
+    timeline.sort(key=lambda x: x["happened_at"], reverse=True)
+    return timeline

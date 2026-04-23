@@ -77,4 +77,14 @@ export class AnalyticsService {
   triggerScoring(): Observable<any> {
     return this.http.post(`${environment.apiUrl}/predictions/trigger`, {});
   }
+
+  getRiskTrend(days = 7): Observable<any> {
+    return this.http.get(`${environment.apiUrl}/analytics/risk-trend`, {
+      params: new HttpParams().set('days', days),
+    });
+  }
+
+  getBlockSummary(): Observable<any[]> {
+    return this.http.get<any[]>(`${environment.apiUrl}/analytics/block-summary`);
+  }
 }

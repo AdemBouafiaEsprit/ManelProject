@@ -26,8 +26,8 @@ export class AlertService {
     return this.http.put<Alert>(`${this.base}/${id}/acknowledge`, {});
   }
 
-  resolve(id: string): Observable<Alert> {
-    return this.http.put<Alert>(`${this.base}/${id}/resolve`, {});
+  resolve(id: string, notes?: string): Observable<Alert> {
+    return this.http.put<Alert>(`${this.base}/${id}/resolve`, { notes: notes ?? null });
   }
 
   bulkAcknowledge(ids: string[]): Observable<any> {

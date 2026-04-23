@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Body
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc, update
 from datetime import datetime, timezone
@@ -7,7 +7,7 @@ from uuid import UUID
 from app.core.database import get_db
 from app.models.alert import Alert
 from app.models.container import Container
-from app.schemas.schemas import AlertOut
+from app.schemas.schemas import AlertOut, ResolveAlert
 from app.routers.auth import get_current_user
 from app.models.user import User
 
@@ -77,6 +77,7 @@ async def acknowledge_alert(
 @router.put("/{alert_id}/resolve", response_model=AlertOut)
 async def resolve_alert(
     alert_id: UUID,
+    payload: ResolveAlert = Body(default=ResolveAlert()),
     db: AsyncSession = Depends(get_db),
     _: User = Depends(get_current_user),
 ):
@@ -86,6 +87,8 @@ async def resolve_alert(
         raise HTTPException(status_code=404, detail="Alert not found")
     alert.resolved_at = datetime.now(timezone.utc)
     alert.is_active = False
+    if payload.notes:
+        alert.resolution_notes = payload.notes
     await db.commit()
     return AlertOut.model_validate(await _enrich_alert(alert, db))
 

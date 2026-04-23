@@ -208,6 +208,66 @@ async def get_commodity_performance(
     return sorted(rows, key=lambda x: x["incidents"], reverse=True)
 
 
+@router.get("/risk-trend")
+async def get_risk_trend(
+    days: int = 7,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    result = await db.execute(
+        select(RiskScore).where(RiskScore.scored_at >= cutoff).order_by(RiskScore.scored_at)
+    )
+    scores = result.scalars().all()
+    daily: dict = {}
+    for s in scores:
+        day = s.scored_at.strftime("%Y-%m-%d")
+        daily.setdefault(day, []).append(s.risk_score or 0)
+    sorted_days = sorted(daily.keys())
+    return {
+        "categories": sorted_days,
+        "series": [{"name": "Avg Risk", "data": [
+            round(sum(daily[d]) / len(daily[d]) * 100, 1) for d in sorted_days
+        ]}],
+    }
+
+
+@router.get("/block-summary")
+async def get_block_summary(
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    res = await db.execute(
+        select(Container.block, func.count().label("cnt"))
+        .where(Container.block.isnot(None))
+        .group_by(Container.block)
+    )
+    block_counts = {r.block: r.cnt for r in res.all()}
+    output = []
+    for blk in sorted(block_counts.keys()):
+        id_res = await db.execute(select(Container.id).where(Container.block == blk))
+        cids = [r[0] for r in id_res.all()]
+        avg_risk = 0.0
+        if cids:
+            rr = await db.execute(
+                select(func.avg(RiskScore.risk_score)).where(
+                    RiskScore.container_id.in_(cids),
+                    RiskScore.scored_at >= datetime.now(timezone.utc) - timedelta(hours=2),
+                )
+            )
+            avg_risk = float(rr.scalar() or 0)
+        ar = await db.execute(
+            select(func.count()).where(Alert.container_id.in_(cids), Alert.is_active == True)
+        )
+        output.append({
+            "block": blk,
+            "containers": block_counts[blk],
+            "avg_risk_score": round(avg_risk * 100, 1),
+            "active_alerts": ar.scalar() or 0,
+        })
+    return output
+
+
 @router.get("/losses-prevented")
 async def get_losses_prevented(
     db: AsyncSession = Depends(get_db),

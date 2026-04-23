@@ -8,7 +8,7 @@ import { ContainerService } from '../../core/api/container.service';
 import { AlertService } from '../../core/api/alert.service';
 import { AnalyticsService } from '../../core/api/analytics.service';
 import { WebSocketService } from '../../core/websocket/websocket.service';
-import { Container, SensorReading, RiskScore, Alert } from '../../shared/models/models';
+import { Container, SensorReading, RiskScore, Alert, ContainerEvent } from '../../shared/models/models';
 
 @Component({
   selector: 'app-container-detail',
@@ -49,6 +49,15 @@ import { Container, SensorReading, RiskScore, Alert } from '../../shared/models/
       </div>
     </div>
   </div>
+
+  <!-- Tabs -->
+  <div class="tabs-bar mb-6">
+    <button class="tab-btn" [class.active]="activeTab() === 'overview'" (click)="activeTab.set('overview')">Overview</button>
+    <button class="tab-btn" [class.active]="activeTab() === 'timeline'" (click)="loadTimeline()">Timeline</button>
+  </div>
+
+  <!-- ── OVERVIEW TAB ── -->
+  <ng-container *ngIf="activeTab() === 'overview'">
 
   <!-- Live Gauges -->
   <div class="gauges-grid mb-6">
@@ -197,6 +206,37 @@ import { Container, SensorReading, RiskScore, Alert } from '../../shared/models/
       </div>
     </div>
   </div>
+  </ng-container><!-- end overview tab -->
+
+  <!-- ── TIMELINE TAB ── -->
+  <ng-container *ngIf="activeTab() === 'timeline'">
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">📋 Container Timeline</span>
+      <span class="text-xs text-muted">{{ timeline().length }} events</span>
+    </div>
+    <div class="timeline-list" *ngIf="!timelineLoading(); else tlSkeleton">
+      <div *ngFor="let item of timeline()" class="tl-item">
+        <div class="tl-dot" [class]="'tl-dot-' + (item.kind === 'alert' ? item.event_type.toLowerCase() : item.event_type.toLowerCase())"></div>
+        <div class="tl-content">
+          <div class="tl-row1">
+            <span class="tl-type">{{ item.event_type }}</span>
+            <span *ngIf="item.username" class="tl-user">{{ item.username }}</span>
+            <span class="tl-time text-xs text-muted">{{ item.happened_at | date:'dd/MM/yy HH:mm' }}</span>
+          </div>
+          <div class="tl-desc">{{ item.description }}</div>
+        </div>
+      </div>
+      <div *ngIf="timeline().length === 0" class="empty-state">No timeline events yet</div>
+    </div>
+    <ng-template #tlSkeleton>
+      <div style="padding:16px;display:flex;flex-direction:column;gap:10px">
+        <div class="skeleton" style="height:44px;border-radius:8px" *ngFor="let i of [1,2,3,4]"></div>
+      </div>
+    </ng-template>
+  </div>
+  </ng-container><!-- end timeline tab -->
+
   <!-- Report Incident Modal -->
   <div class="modal-overlay" *ngIf="showReportModal()" (click)="showReportModal.set(false)">
     <div class="modal-card" (click)="$event.stopPropagation()">
@@ -349,6 +389,35 @@ import { Container, SensorReading, RiskScore, Alert } from '../../shared/models/
       font-size: 11px; background: rgba(100,116,139,0.1); color: #475569;
       padding: 1px 8px; border-radius: 99px;
     }
+    .tabs-bar { display: flex; gap: 4px; border-bottom: 2px solid #E2E8F0; }
+    .tab-btn {
+      padding: 8px 20px; background: none; border: none; font-size: 14px; font-weight: 500;
+      color: #64748B; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -2px;
+      transition: all 0.15s;
+      &.active { color: #003B72; border-bottom-color: #003B72; font-weight: 700; }
+      &:hover:not(.active) { color: #374151; }
+    }
+    .timeline-list { padding: 8px 0; max-height: 600px; overflow-y: auto; }
+    .tl-item {
+      display: flex; gap: 14px; padding: 12px 20px;
+      border-bottom: 1px solid #F8FAFC;
+      &:last-child { border-bottom: none; }
+    }
+    .tl-dot {
+      width: 10px; height: 10px; border-radius: 50%; margin-top: 5px; flex-shrink: 0;
+      background: #CBD5E1;
+    }
+    .tl-dot-created { background: #22C55E; }
+    .tl-dot-status_changed { background: #3B82F6; }
+    .tl-dot-incident_reported { background: #EF4444; }
+    .tl-dot-temp_critical, .tl-dot-temp_warning { background: #F59E0B; }
+    .tl-dot-shock_detected { background: #EF4444; }
+    .tl-content { flex: 1; }
+    .tl-row1 { display: flex; align-items: center; gap: 10px; margin-bottom: 3px; }
+    .tl-type { font-size: 12px; font-weight: 700; color: #374151; text-transform: uppercase; letter-spacing: 0.04em; }
+    .tl-user { font-size: 11px; background: #EEF2FF; color: #4F46E5; padding: 1px 7px; border-radius: 99px; }
+    .tl-time { margin-left: auto; }
+    .tl-desc { font-size: 13px; color: #64748B; line-height: 1.4; }
   `]
 })
 export class ContainerDetailComponent implements OnInit, OnDestroy {
@@ -359,6 +428,10 @@ export class ContainerDetailComponent implements OnInit, OnDestroy {
   chartHours = signal(24);
   chartOptions: any = null;
   forecastOptions: any = null;
+
+  activeTab = signal<'overview' | 'timeline'>('overview');
+  timeline = signal<ContainerEvent[]>([]);
+  timelineLoading = signal(false);
 
   showReportModal = signal(false);
   reporting = signal(false);
@@ -505,6 +578,15 @@ export class ContainerDetailComponent implements OnInit, OnDestroy {
         this.reporting.set(false);
         this.reportError.set(err.error?.detail || 'Failed to report incident.');
       },
+    });
+  }
+
+  loadTimeline() {
+    this.activeTab.set('timeline');
+    this.timelineLoading.set(true);
+    this.containerService.getTimeline(this.id).subscribe({
+      next: (data) => { this.timeline.set(data); this.timelineLoading.set(false); },
+      error: () => this.timelineLoading.set(false),
     });
   }
 

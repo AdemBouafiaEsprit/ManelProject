@@ -2,10 +2,11 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from uuid import UUID
 from app.core.database import get_db
 from app.core.security import verify_password, create_access_token, decode_access_token
 from app.models.user import User
-from app.schemas.schemas import Token, UserOut, UserCreate
+from app.schemas.schemas import Token, UserOut, UserCreate, UserUpdate
 from app.core.security import get_password_hash
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
@@ -80,3 +81,39 @@ async def list_users(
 ):
     result = await db.execute(select(User).order_by(User.created_at))
     return [UserOut.model_validate(u) for u in result.scalars().all()]
+
+
+@router.put("/users/{user_id}", response_model=UserOut)
+async def update_user(
+    user_id: UUID,
+    data: UserUpdate,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(require_role("admin")),
+):
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    if data.role is not None:
+        user.role = data.role
+    if data.is_active is not None:
+        user.is_active = data.is_active
+    await db.commit()
+    await db.refresh(user)
+    return UserOut.model_validate(user)
+
+
+@router.delete("/users/{user_id}", status_code=204)
+async def deactivate_user(
+    user_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_role("admin")),
+):
+    if user_id == current_user.id:
+        raise HTTPException(status_code=400, detail="Cannot deactivate your own account")
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    user.is_active = False
+    await db.commit()

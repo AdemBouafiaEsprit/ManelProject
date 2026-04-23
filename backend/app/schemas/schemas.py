@@ -151,8 +151,34 @@ class AlertOut(BaseModel):
     acknowledged_at: Optional[datetime]
     acknowledged_by: Optional[UUID]
     resolved_at: Optional[datetime]
+    resolution_notes: Optional[str] = None
     is_active: bool
     container_number: Optional[str] = None
+
+    model_config = {"from_attributes": True}
+
+
+class ResolveAlert(BaseModel):
+    notes: Optional[str] = None
+
+
+class UserUpdate(BaseModel):
+    role: Optional[str] = None
+    is_active: Optional[bool] = None
+
+
+class BulkStatusUpdate(BaseModel):
+    container_ids: List[UUID]
+    status: str
+
+
+class ContainerEventOut(BaseModel):
+    id: UUID
+    container_id: UUID
+    event_type: str
+    description: str
+    username: Optional[str] = None
+    happened_at: datetime
 
     model_config = {"from_attributes": True}
 

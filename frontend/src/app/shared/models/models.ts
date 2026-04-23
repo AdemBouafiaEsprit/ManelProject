@@ -60,8 +60,18 @@ export interface Alert {
   acknowledged_at?: string;
   acknowledged_by?: string;
   resolved_at?: string;
+  resolution_notes?: string;
   is_active: boolean;
   container_number?: string;
+}
+
+// Container timeline event
+export interface ContainerEvent {
+  kind: 'event' | 'alert';
+  event_type: string;
+  description: string;
+  username?: string;
+  happened_at: string;
 }
 
 // Auth

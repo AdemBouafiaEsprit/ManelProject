@@ -1,6 +1,6 @@
 import { Component, OnInit, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { RouterLink } from '@angular/router';
+import { RouterLink, ActivatedRoute } from '@angular/router';
 import { FormsModule } from '@angular/forms';
 import { ContainerService } from '../../core/api/container.service';
 import { Container } from '../../shared/models/models';
@@ -48,6 +48,22 @@ import { RegisterContainerComponent } from './register-container.component';
     </div>
   </div>
 
+  <!-- Bulk actions toolbar -->
+  <div class="bulk-toolbar" *ngIf="selected().size > 0">
+    <span class="bulk-info">{{ selected().size }} selected</span>
+    <select class="filter-select" [(ngModel)]="bulkStatus">
+      <option value="">Set Status…</option>
+      <option value="active">Active</option>
+      <option value="maintenance">Maintenance</option>
+      <option value="offline">Offline</option>
+      <option value="departed">Departed</option>
+    </select>
+    <button class="btn btn-primary btn-sm" (click)="applyBulkStatus()" [disabled]="!bulkStatus || bulkLoading()">
+      {{ bulkLoading() ? 'Applying…' : 'Apply' }}
+    </button>
+    <button class="btn btn-ghost btn-sm" (click)="clearSelection()">Clear</button>
+  </div>
+
   <app-register-container *ngIf="showRegister()"
     (close)="showRegister.set(false)"
     (created)="onContainerCreated($event)">
@@ -63,6 +79,7 @@ import { RegisterContainerComponent } from './register-container.component';
     <table class="data-table" *ngIf="!loading(); else skeletonTpl">
       <thead>
         <tr>
+          <th><input type="checkbox" (change)="toggleAll($event)" /></th>
           <th>Container #</th>
           <th>Commodity</th>
           <th>Block / Slot</th>
@@ -76,8 +93,11 @@ import { RegisterContainerComponent } from './register-container.component';
         </tr>
       </thead>
       <tbody>
-        <tr *ngFor="let c of filtered()" [routerLink]="['/containers', c.id]" style="cursor:pointer">
-          <td><code class="cn-code">{{ c.container_number }}</code></td>
+        <tr *ngFor="let c of filtered()" [class.selected-row]="selected().has(c.id)">
+          <td (click)="$event.stopPropagation()">
+            <input type="checkbox" [checked]="selected().has(c.id)" (change)="toggleSelect(c.id)" />
+          </td>
+          <td [routerLink]="['/containers', c.id]" style="cursor:pointer"><code class="cn-code">{{ c.container_number }}</code></td>
           <td>
             <div class="commodity-cell">
               <span class="comm-icon">{{ getCommodityIcon(c.commodity) }}</span>
@@ -121,7 +141,7 @@ import { RegisterContainerComponent } from './register-container.component';
           </td>
         </tr>
         <tr *ngIf="filtered().length === 0">
-          <td colspan="10" class="empty-row">No containers match your filters</td>
+          <td colspan="11" class="empty-row">No containers match your filters</td>
         </tr>
       </tbody>
     </table>
@@ -176,28 +196,41 @@ import { RegisterContainerComponent } from './register-container.component';
       cursor: pointer; transition: all 0.15s;
       &:hover { border-color: #003B72; color: #003B72; background: #F0F7FF; }
     }
+    .bulk-toolbar {
+      display: flex; align-items: center; gap: 10px;
+      padding: 10px 16px; background: #EFF6FF; border: 1.5px solid #BFDBFE;
+      border-radius: 10px; margin-bottom: 12px;
+    }
+    .bulk-info { font-size: 13px; font-weight: 600; color: #1D4ED8; flex: 1; }
+    .selected-row { background: rgba(0,59,114,0.04); }
   `]
 })
 export class ContainersComponent implements OnInit {
   containers = signal<Container[]>([]);
   filtered = signal<Container[]>([]);
   loading = signal(true);
+  selected = signal<Set<string>>(new Set());
+  bulkLoading = signal(false);
 
   search = '';
   filterBlock = '';
   filterStatus = '';
   filterRisk = '';
+  bulkStatus = '';
   showRegister = signal(false);
   showEdit = signal(false);
   editingContainer = signal<Container | null>(null);
 
-  constructor(private containerService: ContainerService) {}
+  constructor(private containerService: ContainerService, private route: ActivatedRoute) {}
 
   ngOnInit() {
+    this.route.queryParams.subscribe(params => {
+      if (params['q']) this.search = params['q'];
+    });
     this.containerService.getAll().subscribe({
       next: (data) => {
         this.containers.set(data);
-        this.filtered.set(data);
+        this.applyFilters();
         this.loading.set(false);
       },
       error: () => this.loading.set(false),
@@ -224,6 +257,39 @@ export class ContainersComponent implements OnInit {
     this.closeEdit();
     this.containers.update(prev => prev.map(c => c.id === updated.id ? updated : c));
     this.applyFilters();
+  }
+
+  toggleSelect(id: string) {
+    const set = new Set(this.selected());
+    set.has(id) ? set.delete(id) : set.add(id);
+    this.selected.set(set);
+  }
+
+  toggleAll(event: Event) {
+    const checked = (event.target as HTMLInputElement).checked;
+    this.selected.set(checked ? new Set(this.filtered().map(c => c.id)) : new Set());
+  }
+
+  clearSelection() {
+    this.selected.set(new Set());
+    this.bulkStatus = '';
+  }
+
+  applyBulkStatus() {
+    if (!this.bulkStatus) return;
+    const ids = Array.from(this.selected());
+    this.bulkLoading.set(true);
+    this.containerService.bulkStatus(ids, this.bulkStatus).subscribe({
+      next: () => {
+        this.bulkLoading.set(false);
+        this.clearSelection();
+        this.containerService.getAll().subscribe(data => {
+          this.containers.set(data);
+          this.applyFilters();
+        });
+      },
+      error: () => this.bulkLoading.set(false),
+    });
   }
 
   applyFilters() {

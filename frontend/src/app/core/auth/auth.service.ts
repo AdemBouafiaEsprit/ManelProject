@@ -64,4 +64,20 @@ export class AuthService {
     const user = this.currentUser;
     return !!user && roles.includes(user.role);
   }
+
+  getUserList(): Observable<User[]> {
+    return this.http.get<User[]>(`${environment.apiUrl}/auth/users`);
+  }
+
+  createUser(data: { username: string; email: string; password: string; role: string }): Observable<User> {
+    return this.http.post<User>(`${environment.apiUrl}/auth/users`, data);
+  }
+
+  updateUser(id: string, data: { role?: string; is_active?: boolean }): Observable<User> {
+    return this.http.put<User>(`${environment.apiUrl}/auth/users/${id}`, data);
+  }
+
+  deactivateUser(id: string): Observable<void> {
+    return this.http.delete<void>(`${environment.apiUrl}/auth/users/${id}`);
+  }
 }
