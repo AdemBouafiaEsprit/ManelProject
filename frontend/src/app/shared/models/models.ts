@@ -5,7 +5,6 @@ export interface Container {
   owner?: string;
   commodity: string;
   target_temp: number;
-  target_humidity?: number;
   tolerance: number;
   arrival_date?: string;
   departure_date?: string;
@@ -28,7 +27,6 @@ export interface SensorReading {
   time: string;
   container_id: string;
   temperature?: number;
-  humidity?: number;
   power_consumption?: number;
   door_status?: boolean;
   compressor_status?: boolean;
@@ -95,7 +93,6 @@ export interface LiveReading {
   bay?: number;
   target_temp: number;
   temperature?: number;
-  humidity?: number;
   power_consumption?: number;
   door_status?: boolean;
   compressor_status?: boolean;

@@ -30,6 +30,16 @@
       "temp_rise_rate": 1.5,
       "compressor_off": true,
       "duration_cycles": 20
+    },
+    "vibration_anomaly": {
+      "vibration_base": 3.0,
+      "vibration_noise": 0.6,
+      "duration_cycles": 30
+    },
+    "shock_impact": {
+      "vibration_spike_min": 5.5,
+      "vibration_spike_max": 9.0,
+      "duration_cycles": 2
     }
   }
 }

@@ -6,7 +6,6 @@ from uuid import UUID
 from app.core.database import get_db
 from app.models.container import Container
 from app.models.sensor import SensorReading
-from app.schemas.schemas import SensorReadingOut
 from app.routers.auth import get_current_user
 from app.models.user import User
 
@@ -45,7 +44,6 @@ async def get_live_readings(
                 "bay": c.bay,
                 "target_temp": c.target_temp,
                 "temperature": reading.temperature,
-                "humidity": reading.humidity,
                 "power_consumption": reading.power_consumption,
                 "door_status": reading.door_status,
                 "compressor_status": reading.compressor_status,
@@ -85,7 +83,6 @@ async def get_chart_data(
     return {
         "timestamps": timestamps,
         "temperature": [r.temperature for r in readings],
-        "humidity": [r.humidity for r in readings],
         "power_consumption": [r.power_consumption for r in readings],
         "vibration_level": [r.vibration_level for r in readings],
         "supply_voltage": [r.supply_voltage for r in readings],

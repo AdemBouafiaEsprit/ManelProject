@@ -113,7 +113,6 @@ class ContainerState:
     def __init__(self, container: dict):
         self.meta = container
         self.current_temp = container["target_temp"] + random.uniform(-0.3, 0.3)
-        self.current_humidity = container["target_humidity"] + random.uniform(-1, 1)
         self.current_power = container["power_base"] + random.uniform(-0.1, 0.1)
         self.supply_voltage = 230.0 + random.uniform(-2, 2)
         self.door_open = False
@@ -123,6 +122,7 @@ class ContainerState:
         self.scenario = "normal"
         self.scenario_cycles_left = 0
         self.fault_label = 0  # 0=no fault, 1=degraded, 2=fault, 3=critical
+        self._shock_vibration = 0.0  # peak value for current shock event
 
     def maybe_inject_fault(self, fault_probability: float):
         if self.scenario == "normal" and random.random() < fault_probability:
@@ -155,7 +155,6 @@ class ContainerState:
             elif self.scenario == "door_left_open":
                 self.door_open = True
                 self.current_temp += cfg["temp_rise_rate"] + random.uniform(-0.1, 0.2)
-                self.current_humidity = min(100, self.current_humidity + cfg["humidity_rise_rate"])
                 self.fault_label = 1
 
             elif self.scenario == "power_fluctuation":
@@ -175,6 +174,28 @@ class ContainerState:
                 self.supply_voltage = random.uniform(150, 180)
                 self.fault_label = 3
 
+            elif self.scenario == "vibration_anomaly":
+                cfg = CONFIG["scenarios"]["vibration_anomaly"]
+                self.vibration = cfg["vibration_base"] + random.uniform(
+                    -cfg["vibration_noise"], cfg["vibration_noise"]
+                )
+                self.vibration = max(2.0, min(5.0, self.vibration))
+                self.fault_label = 1
+
+            elif self.scenario == "shock_impact":
+                cfg = CONFIG["scenarios"]["shock_impact"]
+                if self.scenario_cycles_left == CONFIG["scenarios"]["shock_impact"]["duration_cycles"]:
+                    # First cycle: generate the spike value
+                    self._shock_vibration = random.uniform(
+                        cfg["vibration_spike_min"], cfg["vibration_spike_max"]
+                    )
+                    logger.info(
+                        f"💥 Shock impact on {self.meta['container_number']}: "
+                        f"vibration={self._shock_vibration:.1f}"
+                    )
+                self.vibration = self._shock_vibration
+                self.fault_label = 2
+
             if self.scenario_cycles_left == 0:
                 logger.info(f"✅ Fault ended on {self.meta['container_number']}, returning to normal")
                 self.scenario = "normal"
@@ -182,6 +203,7 @@ class ContainerState:
                 self.door_open = False
                 self.compressor_on = True
                 self.supply_voltage = 230
+                self._shock_vibration = 0.0
 
         else:
             # Normal operation — gentle drift back to target
@@ -189,21 +211,18 @@ class ContainerState:
             self.current_temp += diff * 0.1 + random.uniform(
                 -cfg_normal["temp_drift"], cfg_normal["temp_drift"]
             )
-            self.current_humidity += random.uniform(
-                -cfg_normal["humidity_drift"], cfg_normal["humidity_drift"]
-            )
-            self.current_humidity = max(30, min(100, self.current_humidity))
             self.current_power = self.meta["power_base"] + random.uniform(
                 -cfg_normal["power_noise"] * 10, cfg_normal["power_noise"] * 10
             )
             self.supply_voltage = 230 + random.uniform(-cfg_normal["voltage_noise"], cfg_normal["voltage_noise"])
             self.compressor_on = True
             self.door_open = False
-            self.vibration = max(0, self.vibration + random.uniform(-0.05, 0.05))
+            # Vibration drifts back toward baseline (0.1–0.5)
+            self.vibration += (0.3 - self.vibration) * 0.2 + random.uniform(-0.05, 0.05)
+            self.vibration = max(0, min(1.5, self.vibration))
 
         return {
             "temperature": round(self.current_temp, 2),
-            "humidity": round(max(20, min(100, self.current_humidity)), 1),
             "power_consumption": round(max(0, self.current_power), 3),
             "door_status": self.door_open,
             "compressor_status": self.compressor_on,
@@ -220,6 +239,32 @@ def get_db_connection():
     return psycopg2.connect(DB_URL)
 
 
+def load_containers_from_db(conn) -> list[dict]:
+    """Load existing containers from the DB and enrich with profile power_base."""
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT id, container_number, commodity, target_temp, tolerance
+        FROM containers
+        WHERE status NOT IN ('departed')
+        ORDER BY container_number
+    """)
+    rows = cur.fetchall()
+    cur.close()
+    containers = []
+    for cid, cn, commodity, target_temp, tolerance in rows:
+        profile = COMMODITY_PROFILES.get(commodity, {"power_base": 3.0})
+        containers.append({
+            "id": str(cid),
+            "container_number": cn,
+            "commodity": commodity,
+            "target_temp": target_temp,
+            "tolerance": tolerance,
+            "power_base": profile.get("power_base", 3.0),
+        })
+    logger.info(f"✅ Loaded {len(containers)} containers from database")
+    return containers
+
+
 def seed_containers(containers: list[dict], conn):
     """Insert containers into PostgreSQL."""
     cur = conn.cursor()
@@ -227,14 +272,14 @@ def seed_containers(containers: list[dict], conn):
         cur.execute("""
             INSERT INTO containers (
                 id, container_number, owner, commodity,
-                target_temp, target_humidity, tolerance,
+                target_temp, tolerance,
                 arrival_date, departure_date, status,
                 block, row_num, bay, tier, slot_lat, slot_lng, ecp_id
-            ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
             ON CONFLICT (container_number) DO NOTHING
         """, (
             c["id"], c["container_number"], c["owner"], c["commodity"],
-            c["target_temp"], c["target_humidity"], c["tolerance"],
+            c["target_temp"], c["tolerance"],
             c["arrival_date"], c["departure_date"], c["status"],
             c["block"], c["row_num"], c["bay"], c["tier"],
             c["slot_lat"], c["slot_lng"], c["ecp_id"],
@@ -248,13 +293,13 @@ def insert_reading(container_id: str, reading: dict, ts: datetime, conn):
     cur = conn.cursor()
     cur.execute("""
         INSERT INTO sensor_readings (
-            time, container_id, temperature, humidity,
+            time, container_id, temperature,
             power_consumption, door_status, compressor_status,
             vibration_level, supply_voltage
-        ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
     """, (
         ts, container_id,
-        reading["temperature"], reading["humidity"],
+        reading["temperature"],
         reading["power_consumption"], reading["door_status"],
         reading["compressor_status"], reading["vibration_level"],
         reading["supply_voltage"],
@@ -332,7 +377,7 @@ def seed_history(states: list[ContainerState], conn):
             reading = state.step()
             rows.append((
                 ts, state.meta["id"],
-                reading["temperature"], reading["humidity"],
+                reading["temperature"],
                 reading["power_consumption"], reading["door_status"],
                 reading["compressor_status"], reading["vibration_level"],
                 reading["supply_voltage"],
@@ -341,7 +386,7 @@ def seed_history(states: list[ContainerState], conn):
         if len(rows) >= batch_size:
             psycopg2.extras.execute_values(cur, """
                 INSERT INTO sensor_readings (
-                    time, container_id, temperature, humidity,
+                    time, container_id, temperature,
                     power_consumption, door_status, compressor_status,
                     vibration_level, supply_voltage
                 ) VALUES %s ON CONFLICT DO NOTHING
@@ -356,7 +401,7 @@ def seed_history(states: list[ContainerState], conn):
     if rows:
         psycopg2.extras.execute_values(cur, """
             INSERT INTO sensor_readings (
-                time, container_id, temperature, humidity,
+                time, container_id, temperature,
                 power_consumption, door_status, compressor_status,
                 vibration_level, supply_voltage
             ) VALUES %s ON CONFLICT DO NOTHING
@@ -389,7 +434,7 @@ def run_realtime(states: list[ContainerState], conn):
 
             rows.append((
                 ts, state.meta["id"],
-                reading["temperature"], reading["humidity"],
+                reading["temperature"],
                 reading["power_consumption"], reading["door_status"],
                 reading["compressor_status"], reading["vibration_level"],
                 reading["supply_voltage"],
@@ -397,7 +442,7 @@ def run_realtime(states: list[ContainerState], conn):
 
         psycopg2.extras.execute_values(cur, """
             INSERT INTO sensor_readings (
-                time, container_id, temperature, humidity,
+                time, container_id, temperature,
                 power_consumption, door_status, compressor_status,
                 vibration_level, supply_voltage
             ) VALUES %s
@@ -469,14 +514,17 @@ def main():
         inject_fault_cli(args.inject_fault[0], args.inject_fault[1], conn)
         return
 
-    # Generate and seed containers
-    containers = generate_containers(CONFIG["num_containers"])
-    seed_containers(containers, conn)
+    if args.realtime_only:
+        # Load existing containers from DB — no new seeding
+        containers = load_containers_from_db(conn)
+    else:
+        # Fresh start: generate and seed containers + optional history
+        containers = generate_containers(CONFIG["num_containers"])
+        seed_containers(containers, conn)
 
-    # Create state machines
     states = [ContainerState(c) for c in containers]
 
-    if args.seed_history:
+    if args.seed_history and not args.realtime_only:
         seed_history(states, conn)
 
     if args.then_realtime or args.realtime_only or (not args.seed_history):

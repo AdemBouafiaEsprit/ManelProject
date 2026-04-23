@@ -62,6 +62,18 @@ export class AnalyticsService {
     return this.http.post(`${environment.apiUrl}/map`, block);
   }
 
+  getBlockList(): Observable<any[]> {
+    return this.http.get<any[]>(`${environment.apiUrl}/map/blocks`);
+  }
+
+  updateBlock(blockId: string, data: any): Observable<any> {
+    return this.http.put(`${environment.apiUrl}/map/${blockId}`, data);
+  }
+
+  deleteBlock(blockId: string): Observable<void> {
+    return this.http.delete<void>(`${environment.apiUrl}/map/${blockId}`);
+  }
+
   triggerScoring(): Observable<any> {
     return this.http.post(`${environment.apiUrl}/predictions/trigger`, {});
   }

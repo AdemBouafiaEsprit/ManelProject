@@ -12,7 +12,6 @@ class Container(Base):
     owner = Column(String(100))
     commodity = Column(String(100), nullable=False)
     target_temp = Column(Float, nullable=False)
-    target_humidity = Column(Float)
     tolerance = Column(Float, default=2.0)
     arrival_date = Column(DateTime(timezone=True))
     departure_date = Column(DateTime(timezone=True))

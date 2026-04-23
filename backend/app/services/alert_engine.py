@@ -5,7 +5,6 @@ Evaluates sensor readings and creates alerts based on predefined thresholds.
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional
-from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_
 from app.models.alert import Alert
@@ -16,6 +15,9 @@ from app.services.websocket_manager import ws_manager
 logger = logging.getLogger(__name__)
 
 DEDUP_WINDOW_MINUTES = 15  # Don't re-create same alert type within this window
+
+IMPACT_WARNING_THRESHOLD = 3.5   # vibration units — moderate shock
+IMPACT_CRITICAL_THRESHOLD = 7.0  # vibration units — severe collision
 
 
 async def check_temp_excursion(
@@ -92,26 +94,6 @@ async def check_door_open(
     return None
 
 
-async def check_humidity_deviation(
-    container: Container, reading: SensorReading, db: AsyncSession
-) -> Optional[Alert]:
-    if container.target_humidity and reading.humidity:
-        deviation = abs(reading.humidity - container.target_humidity)
-        if deviation > 15:
-            return await _create_alert_if_new(
-                container=container,
-                alert_type="HUMIDITY_DEVIATION",
-                severity="WARNING",
-                message=(
-                    f"WARNING: Humidity deviation on {container.container_number}. "
-                    f"Current: {reading.humidity:.1f}%RH, Target: {container.target_humidity}%RH."
-                ),
-                recommended_action="Check humidity control system.",
-                db=db,
-            )
-    return None
-
-
 async def check_voltage_drop(
     container: Container, reading: SensorReading, db: AsyncSession
 ) -> Optional[Alert]:
@@ -130,6 +112,38 @@ async def check_voltage_drop(
     return None
 
 
+async def check_impact(
+    container: Container, reading: SensorReading, db: AsyncSession
+) -> Optional[Alert]:
+    if not reading.vibration_level:
+        return None
+
+    if reading.vibration_level >= IMPACT_CRITICAL_THRESHOLD:
+        severity = "CRITICAL"
+        desc = f"severe shock detected (vibration: {reading.vibration_level:.1f})"
+    elif reading.vibration_level >= IMPACT_WARNING_THRESHOLD:
+        severity = "WARNING"
+        desc = f"moderate shock detected (vibration: {reading.vibration_level:.1f})"
+    else:
+        return None
+
+    slot = f"{container.block}-{container.row_num:02d}-{container.bay:02d}"
+    return await _create_alert_if_new(
+        container=container,
+        alert_type="SHOCK_DETECTED",
+        severity=severity,
+        message=(
+            f"{severity}: Physical shock on {container.container_number} ({container.commodity}). "
+            f"{desc.capitalize()}. Possible collision or rough handling."
+        ),
+        recommended_action=(
+            f"Inspect container {container.container_number} at slot {slot} "
+            f"(ECP {container.ecp_id}) for structural damage and cargo integrity."
+        ),
+        db=db,
+    )
+
+
 async def evaluate_reading(
     container: Container, reading: SensorReading, db: AsyncSession
 ) -> list[Alert]:
@@ -139,8 +153,8 @@ async def evaluate_reading(
         check_temp_excursion,
         check_compressor_fault,
         check_door_open,
-        check_humidity_deviation,
         check_voltage_drop,
+        check_impact,
     ]
     for check_fn in checks:
         try:

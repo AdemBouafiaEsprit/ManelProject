@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(docker-compose exec *)",
+      "Bash(docker-compose restart *)",
+      "Bash(docker-compose logs *)",
+      "Bash(docker-compose build *)",
+      "Bash(docker-compose up *)",
+      "Bash(docker exec *)",
+      "Bash(curl -s http://localhost:8000/openapi.json)",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); paths=[p for p in d['paths'] if '/map' in p]; print\\('\\\\n'.join\\(sorted\\(paths\\)\\)\\)\")"
+    ]
+  }
+}

@@ -28,7 +28,6 @@ CREATE TABLE IF NOT EXISTS containers (
   owner VARCHAR(100),
   commodity VARCHAR(100) NOT NULL,
   target_temp FLOAT NOT NULL,
-  target_humidity FLOAT,
   tolerance FLOAT DEFAULT 2.0,
   arrival_date TIMESTAMPTZ,
   departure_date TIMESTAMPTZ,
@@ -50,7 +49,6 @@ CREATE TABLE IF NOT EXISTS sensor_readings (
   time TIMESTAMPTZ NOT NULL,
   container_id UUID REFERENCES containers(id) ON DELETE CASCADE,
   temperature FLOAT,
-  humidity FLOAT,
   power_consumption FLOAT,
   door_status BOOLEAN DEFAULT FALSE,
   compressor_status BOOLEAN DEFAULT TRUE,
@@ -92,8 +90,9 @@ CREATE TABLE IF NOT EXISTS alerts (
   container_id UUID REFERENCES containers(id) ON DELETE CASCADE,
   alert_type VARCHAR(50) NOT NULL CHECK (alert_type IN (
     'TEMP_EXCURSION', 'POWER_FAILURE', 'COMPRESSOR_FAULT',
-    'HIGH_RISK_PREDICTED', 'DOOR_OPEN', 'HUMIDITY_DEVIATION',
-    'VOLTAGE_DROP', 'COMPLETE_FAILURE', 'VIBRATION_ANOMALY'
+    'HIGH_RISK_PREDICTED', 'DOOR_OPEN',
+    'VOLTAGE_DROP', 'COMPLETE_FAILURE', 'VIBRATION_ANOMALY',
+    'SHOCK_DETECTED'
   )),
   severity VARCHAR(10) NOT NULL CHECK (severity IN ('INFO', 'WARNING', 'CRITICAL')),
   message TEXT NOT NULL,
@@ -121,7 +120,6 @@ SELECT
   AVG(temperature) AS avg_temp,
   MAX(temperature) AS max_temp,
   MIN(temperature) AS min_temp,
-  AVG(humidity) AS avg_humidity,
   AVG(power_consumption) AS avg_power,
   COUNT(*) AS reading_count
 FROM sensor_readings

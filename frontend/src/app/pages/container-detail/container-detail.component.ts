@@ -1,5 +1,6 @@
-import { Component, OnInit, OnDestroy, signal, AfterViewInit } from '@angular/core';
+import { Component, OnInit, OnDestroy, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, RouterLink } from '@angular/router';
 import { NgApexchartsModule } from 'ng-apexcharts';
 import { Subscription } from 'rxjs';
@@ -12,7 +13,7 @@ import { Container, SensorReading, RiskScore, Alert } from '../../shared/models/
 @Component({
   selector: 'app-container-detail',
   standalone: true,
-  imports: [CommonModule, RouterLink, NgApexchartsModule],
+  imports: [CommonModule, RouterLink, NgApexchartsModule, FormsModule],
   template: `
 <div class="page" *ngIf="container(); else loadingTpl">
 
@@ -34,6 +35,13 @@ import { Container, SensorReading, RiskScore, Alert } from '../../shared/models/
         </p>
       </div>
       <div class="header-actions">
+        <button class="btn-report-incident" (click)="showReportModal.set(true)">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+            <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+          </svg>
+          Report Incident
+        </button>
         <div class="temp-banner" [class]="getTempClass()">
           <div class="tb-current">{{ latestReading()?.temperature?.toFixed(2) ?? '—' }}°C</div>
           <div class="tb-label">Setpoint: {{ container()!.target_temp }}°C ±{{ container()!.tolerance }}°C</div>
@@ -50,11 +58,6 @@ import { Container, SensorReading, RiskScore, Alert } from '../../shared/models/
         {{ latestReading()?.temperature?.toFixed(1) ?? '—' }}
       </div>
       <div class="gauge-unit">°C (set: {{ container()!.target_temp }}°C)</div>
-    </div>
-    <div class="gauge-card">
-      <div class="gauge-label">💧 Humidity</div>
-      <div class="gauge-value">{{ latestReading()?.humidity?.toFixed(0) ?? '—' }}</div>
-      <div class="gauge-unit">%RH (target: {{ container()!.target_humidity }}%)</div>
     </div>
     <div class="gauge-card">
       <div class="gauge-label">⚡ Power Consumption</div>
@@ -80,7 +83,14 @@ import { Container, SensorReading, RiskScore, Alert } from '../../shared/models/
       <div class="gauge-value" [class.danger-val]="latestReading()?.compressor_status === false">
         {{ latestReading()?.compressor_status !== false ? 'RUNNING' : 'FAULT' }}
       </div>
-      <div class="gauge-unit">{{ latestReading()?.vibration_level?.toFixed(1) ?? '—' }} vibration</div>
+      <div class="gauge-unit">{{ latestReading()?.compressor_status !== false ? '✅ Operating' : '🔴 Check unit' }}</div>
+    </div>
+    <div class="gauge-card" [class.gauge-shock]="isCriticalVibration()" [class.gauge-warn]="isHighVibration()">
+      <div class="gauge-label">📳 Vibration</div>
+      <div class="gauge-value" [class.danger-val]="isCriticalVibration()" [class.warn-val]="isHighVibration()">
+        {{ latestReading()?.vibration_level?.toFixed(2) ?? '—' }}
+      </div>
+      <div class="gauge-unit">{{ getVibrationStatus() }}</div>
     </div>
   </div>
 
@@ -187,6 +197,39 @@ import { Container, SensorReading, RiskScore, Alert } from '../../shared/models/
       </div>
     </div>
   </div>
+  <!-- Report Incident Modal -->
+  <div class="modal-overlay" *ngIf="showReportModal()" (click)="showReportModal.set(false)">
+    <div class="modal-card" (click)="$event.stopPropagation()">
+      <div class="modal-header">
+        <h3 class="modal-title">⚠️ Report Physical Incident</h3>
+        <button class="btn-close-modal" (click)="showReportModal.set(false)">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M18 6L6 18M6 6l12 12"/>
+          </svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <p class="modal-desc">
+          Report a physical accident on <strong>{{ container()!.container_number }}</strong> —
+          collision with a truck, crane, forklift, or another container.
+        </p>
+        <div class="modal-form-group">
+          <label>Description</label>
+          <textarea [(ngModel)]="incidentDescription" name="incident"
+            placeholder="Describe what happened (e.g. forklift hit the left side, dropped by crane...)"
+            rows="4"></textarea>
+        </div>
+        <div class="modal-error" *ngIf="reportError()">{{ reportError() }}</div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-ghost" (click)="showReportModal.set(false)" [disabled]="reporting()">Cancel</button>
+        <button class="btn btn-danger" (click)="submitIncident()"
+          [disabled]="reporting() || !incidentDescription.trim()">
+          {{ reporting() ? 'Reporting...' : 'Report Incident' }}
+        </button>
+      </div>
+    </div>
+  </div>
 </div>
 
 <ng-template #loadingTpl>
@@ -201,6 +244,58 @@ import { Container, SensorReading, RiskScore, Alert } from '../../shared/models/
     .back-link { font-size: 13px; color: #64748B; text-decoration: none;
       &:hover { color: #003B72; } }
     .header-actions { display: flex; align-items: center; gap: 12px; }
+
+    .btn-report-incident {
+      display: inline-flex; align-items: center; gap: 7px;
+      padding: 9px 16px; border-radius: 8px; font-size: 13px; font-weight: 600;
+      border: 1.5px solid #FCA5A5; background: #FFF5F5; color: #DC2626; cursor: pointer;
+      transition: all 0.15s;
+      &:hover { background: #FEE2E2; border-color: #EF4444; }
+    }
+    .warn-val { color: #B45309 !important; font-weight: 700; }
+    .gauge-warn { background: rgba(245,158,11,0.06) !important; border-color: rgba(245,158,11,0.3) !important; }
+    .gauge-shock { background: rgba(239,68,68,0.06) !important; border-color: rgba(239,68,68,0.3) !important;
+      animation: badge-pulse 2s infinite; }
+
+    /* Report Incident Modal */
+    .modal-overlay {
+      position: fixed; inset: 0; background: rgba(15,23,42,0.5);
+      backdrop-filter: blur(4px); z-index: 1100;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .modal-card {
+      background: white; border-radius: 16px; width: 100%; max-width: 480px;
+      box-shadow: 0 25px 60px rgba(0,0,0,0.2);
+      animation: slideUp 0.2s ease-out;
+    }
+    @keyframes slideUp { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+    .modal-header {
+      padding: 20px 24px 16px; border-bottom: 1px solid #F1F5F9;
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    .modal-title { font-size: 17px; font-weight: 700; color: #0F172A; }
+    .btn-close-modal { background: none; border: none; color: #94A3B8; cursor: pointer;
+      &:hover { color: #374151; } }
+    .modal-body { padding: 20px 24px; }
+    .modal-desc { font-size: 13px; color: #64748B; margin-bottom: 16px; line-height: 1.5; }
+    .modal-form-group label { display: block; font-size: 13px; font-weight: 600; color: #374151; margin-bottom: 6px; }
+    .modal-form-group textarea {
+      width: 100%; padding: 10px 12px; border: 1.5px solid #E2E8F0; border-radius: 8px;
+      font-size: 14px; outline: none; resize: vertical; font-family: inherit;
+      &:focus { border-color: #003B72; }
+    }
+    .modal-error { margin-top: 10px; background: #FEF2F2; color: #DC2626;
+      padding: 10px 12px; border-radius: 8px; font-size: 13px; }
+    .modal-footer {
+      padding: 16px 24px; border-top: 1px solid #F1F5F9; background: #F8FAFC;
+      border-radius: 0 0 16px 16px; display: flex; gap: 10px; justify-content: flex-end;
+    }
+    .btn-danger {
+      padding: 9px 20px; border-radius: 8px; border: none; font-size: 13px; font-weight: 600;
+      background: #EF4444; color: white; cursor: pointer; transition: background 0.15s;
+      &:hover:not(:disabled) { background: #DC2626; }
+      &:disabled { opacity: 0.5; cursor: not-allowed; }
+    }
     .temp-banner {
       text-align: center; padding: 12px 20px; border-radius: 12px;
       background: rgba(34,197,94,0.08); border: 1.5px solid rgba(34,197,94,0.2);
@@ -264,6 +359,11 @@ export class ContainerDetailComponent implements OnInit, OnDestroy {
   chartHours = signal(24);
   chartOptions: any = null;
   forecastOptions: any = null;
+
+  showReportModal = signal(false);
+  reporting = signal(false);
+  reportError = signal<string | null>(null);
+  incidentDescription = '';
 
   private id!: string;
   private subs: Subscription[] = [];
@@ -370,6 +470,42 @@ export class ContainerDetailComponent implements OnInit, OnDestroy {
     if (dev > c.tolerance * 3) return 'crit';
     if (dev > c.tolerance * 1.5) return 'warn';
     return '';
+  }
+
+  isHighVibration(): boolean {
+    const v = this.latestReading()?.vibration_level;
+    return v != null && v >= 3.5 && v < 7.0;
+  }
+
+  isCriticalVibration(): boolean {
+    const v = this.latestReading()?.vibration_level;
+    return v != null && v >= 7.0;
+  }
+
+  getVibrationStatus(): string {
+    const v = this.latestReading()?.vibration_level;
+    if (v == null) return 'No data';
+    if (v >= 7.0) return '🚨 Critical shock!';
+    if (v >= 3.5) return '⚠️ Elevated — check';
+    return '✅ Normal';
+  }
+
+  submitIncident() {
+    if (!this.incidentDescription.trim()) return;
+    this.reporting.set(true);
+    this.reportError.set(null);
+    this.containerService.reportIncident(this.id, this.incidentDescription).subscribe({
+      next: (alert) => {
+        this.reporting.set(false);
+        this.showReportModal.set(false);
+        this.incidentDescription = '';
+        this.containerAlerts.update(prev => [alert, ...prev]);
+      },
+      error: (err) => {
+        this.reporting.set(false);
+        this.reportError.set(err.error?.detail || 'Failed to report incident.');
+      },
+    });
   }
 
   ackAlert(a: Alert) {

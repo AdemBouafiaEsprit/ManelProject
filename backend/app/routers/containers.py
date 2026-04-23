@@ -9,7 +9,8 @@ from app.models.container import Container
 from app.models.sensor import SensorReading
 from app.models.risk_score import RiskScore
 from app.models.alert import Alert
-from app.schemas.schemas import ContainerOut, ContainerUpdate, ContainerCreate, SensorReadingOut, RiskScoreOut
+from app.schemas.schemas import ContainerOut, ContainerUpdate, ContainerCreate, ContainerEdit, SensorReadingOut, RiskScoreOut, AlertOut, IncidentReport
+from app.models.alert import Alert
 from app.routers.auth import get_current_user, require_role
 from app.models.user import User
 
@@ -145,12 +146,91 @@ async def update_container_status(
     return ContainerOut.model_validate(await _enrich_container(container, db))
 
 
+@router.put("/{container_id}", response_model=ContainerOut)
+async def edit_container(
+    container_id: UUID,
+    update: ContainerEdit,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(require_role("admin", "supervisor")),
+):
+    result = await db.execute(select(Container).where(Container.id == container_id))
+    container = result.scalar_one_or_none()
+    if not container:
+        raise HTTPException(status_code=404, detail="Container not found")
+
+    if update.container_number is not None:
+        import re
+        if not re.match(r'^[A-Z]{4}\d{7}$', update.container_number):
+            raise HTTPException(
+                status_code=422,
+                detail="Invalid container number. Required format: 4 letters + 7 digits (e.g. CMAU7821697)",
+            )
+        dup = await db.execute(
+            select(Container).where(
+                Container.container_number == update.container_number,
+                Container.id != container_id,
+            )
+        )
+        if dup.scalar_one_or_none():
+            raise HTTPException(
+                status_code=400,
+                detail=f"Container {update.container_number} already exists",
+            )
+        container.container_number = update.container_number
+
+    for field in ["owner", "commodity", "target_temp", "tolerance", "status", "block", "row_num", "bay", "tier", "ecp_id"]:
+        val = getattr(update, field)
+        if val is not None:
+            setattr(container, field, val)
+
+    await db.commit()
+    return ContainerOut.model_validate(await _enrich_container(container, db))
+
+
+@router.post("/{container_id}/report-incident", response_model=AlertOut, status_code=201)
+async def report_incident(
+    container_id: UUID,
+    payload: IncidentReport,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    result = await db.execute(select(Container).where(Container.id == container_id))
+    container = result.scalar_one_or_none()
+    if not container:
+        raise HTTPException(status_code=404, detail="Container not found")
+
+    slot = f"{container.block}-{container.row_num:02d}-{container.bay:02d}"
+    alert = Alert(
+        container_id=container_id,
+        alert_type="SHOCK_DETECTED",
+        severity="WARNING",
+        message=f"MANUALLY REPORTED: Physical incident on {container.container_number}. {payload.description}",
+        recommended_action=(
+            f"Inspect container {container.container_number} at slot {slot} "
+            f"(ECP {container.ecp_id}) for structural damage and cargo integrity."
+        ),
+        is_active=True,
+    )
+    db.add(alert)
+    await db.commit()
+    await db.refresh(alert)
+    return AlertOut.model_validate(alert)
+
+
 @router.post("", response_model=ContainerOut, status_code=201)
 async def create_container(
     payload: ContainerCreate,
     db: AsyncSession = Depends(get_db),
     _: User = Depends(require_role("admin", "supervisor")),
 ):
+    # Validate container number format: 4 uppercase letters + 7 digits (e.g. CMAU7821697)
+    import re
+    if not re.match(r'^[A-Z]{4}\d{7}$', payload.container_number):
+        raise HTTPException(
+            status_code=422,
+            detail="Invalid container number. Required format: 4 letters + 7 digits (e.g. CMAU7821697)",
+        )
+
     # Check for existing container number
     result = await db.execute(
         select(Container).where(Container.container_number == payload.container_number)

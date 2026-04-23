@@ -41,7 +41,6 @@ class ContainerOut(BaseModel):
     owner: Optional[str]
     commodity: str
     target_temp: float
-    target_humidity: Optional[float]
     tolerance: float
     arrival_date: Optional[datetime]
     departure_date: Optional[datetime]
@@ -69,12 +68,25 @@ class ContainerUpdate(BaseModel):
     bay: Optional[int] = None
 
 
+class ContainerEdit(BaseModel):
+    container_number: Optional[str] = None
+    owner: Optional[str] = None
+    commodity: Optional[str] = None
+    target_temp: Optional[float] = None
+    tolerance: Optional[float] = None
+    status: Optional[str] = None
+    block: Optional[str] = None
+    row_num: Optional[int] = None
+    bay: Optional[int] = None
+    tier: Optional[int] = None
+    ecp_id: Optional[str] = None
+
+
 class ContainerCreate(BaseModel):
     container_number: str
     owner: Optional[str] = None
     commodity: str
     target_temp: float
-    target_humidity: Optional[float] = None
     tolerance: float = 2.0
     arrival_date: Optional[datetime] = None
     departure_date: Optional[datetime] = None
@@ -92,7 +104,6 @@ class SensorReadingOut(BaseModel):
     time: datetime
     container_id: UUID
     temperature: Optional[float]
-    humidity: Optional[float]
     power_consumption: Optional[float]
     door_status: Optional[bool]
     compressor_status: Optional[bool]
@@ -105,7 +116,6 @@ class SensorReadingOut(BaseModel):
 class SensorReadingCreate(BaseModel):
     container_id: UUID
     temperature: Optional[float]
-    humidity: Optional[float]
     power_consumption: Optional[float]
     door_status: bool = False
     compressor_status: bool = True
@@ -159,6 +169,7 @@ class BlockCreate(BaseModel):
     lat_max: float
     lng_min: float
     lng_max: float
+    coordinates: Optional[List] = None  # [[lng, lat], ...] — actual drawn polygon
 
 
 class BlockOut(BaseModel):
@@ -174,8 +185,28 @@ class BlockOut(BaseModel):
     lat_max: float
     lng_min: float
     lng_max: float
+    coordinates: Optional[List] = None
+    rotation: float = 0.0
 
     model_config = {"from_attributes": True}
+
+
+class BlockEdit(BaseModel):
+    name: Optional[str] = None
+    rows: Optional[int] = None
+    bays: Optional[int] = None
+    tiers: Optional[int] = None
+    color: Optional[str] = None
+    stroke: Optional[str] = None
+    lat_min: Optional[float] = None
+    lat_max: Optional[float] = None
+    lng_min: Optional[float] = None
+    lng_max: Optional[float] = None
+    rotation: Optional[float] = None
+
+
+class IncidentReport(BaseModel):
+    description: str
 
 
 # ── Analytics ─────────────────────────────────────────────────────

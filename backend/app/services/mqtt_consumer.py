@@ -61,7 +61,6 @@ async def _process_message(topic: str, payload: str):
                 container_id=container.id,
                 time=datetime.now(timezone.utc),
                 temperature=data.get("temperature"),
-                humidity=data.get("humidity"),
                 power_consumption=data.get("power_consumption"),
                 door_status=data.get("door_status", False),
                 compressor_status=data.get("compressor_status", True),
@@ -81,7 +80,6 @@ async def _process_message(topic: str, payload: str):
                 "container_number": container_number,
                 "data": {
                     "temperature": reading.temperature,
-                    "humidity": reading.humidity,
                     "power_consumption": reading.power_consumption,
                     "door_status": reading.door_status,
                     "compressor_status": reading.compressor_status,

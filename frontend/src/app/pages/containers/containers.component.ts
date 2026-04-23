@@ -48,9 +48,15 @@ import { RegisterContainerComponent } from './register-container.component';
     </div>
   </div>
 
-  <app-register-container *ngIf="showRegister()" 
+  <app-register-container *ngIf="showRegister()"
     (close)="showRegister.set(false)"
     (created)="onContainerCreated($event)">
+  </app-register-container>
+
+  <app-register-container *ngIf="showEdit() && editingContainer()"
+    [editContainer]="editingContainer()"
+    (close)="closeEdit()"
+    (created)="onContainerUpdated($event)">
   </app-register-container>
 
   <div class="card" style="overflow:auto">
@@ -62,15 +68,15 @@ import { RegisterContainerComponent } from './register-container.component';
           <th>Block / Slot</th>
           <th>Setpoint</th>
           <th>Current Temp</th>
-          <th>Humidity</th>
           <th>Compressor</th>
           <th>Risk</th>
           <th>Status</th>
           <th>Last Update</th>
+          <th></th>
         </tr>
       </thead>
       <tbody>
-        <tr *ngFor="let c of filtered()" [routerLink]="['/containers', c.id]">
+        <tr *ngFor="let c of filtered()" [routerLink]="['/containers', c.id]" style="cursor:pointer">
           <td><code class="cn-code">{{ c.container_number }}</code></td>
           <td>
             <div class="commodity-cell">
@@ -89,7 +95,6 @@ import { RegisterContainerComponent } from './register-container.component';
               {{ c.latest_reading?.temperature?.toFixed(1) ?? '—' }}°C
             </span>
           </td>
-          <td>{{ c.latest_reading?.humidity?.toFixed(0) ?? '—' }}%</td>
           <td>
             <span class="comp-indicator" [class.on]="c.latest_reading?.compressor_status !== false">
               <span class="dot" [class]="c.latest_reading?.compressor_status !== false ? 'green' : 'red'"></span>
@@ -105,6 +110,15 @@ import { RegisterContainerComponent } from './register-container.component';
             <span class="status-badge {{ c.status }}">{{ c.status.toUpperCase() }}</span>
           </td>
           <td class="text-muted text-xs">{{ c.latest_reading?.time | date:'HH:mm:ss' }}</td>
+          <td (click)="$event.stopPropagation()">
+            <button class="btn-edit" (click)="openEdit(c)">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+              </svg>
+              Edit
+            </button>
+          </td>
         </tr>
         <tr *ngIf="filtered().length === 0">
           <td colspan="10" class="empty-row">No containers match your filters</td>
@@ -154,6 +168,14 @@ import { RegisterContainerComponent } from './register-container.component';
     .empty-row { text-align: center; padding: 40px !important; color: #9CA3AF; }
     .skeleton-rows { padding: 16px; display: flex; flex-direction: column; gap: 10px; }
     .skeleton-row { height: 44px; border-radius: 8px; }
+
+    .btn-edit {
+      display: inline-flex; align-items: center; gap: 5px;
+      padding: 5px 10px; border-radius: 6px; border: 1.5px solid #E2E8F0;
+      background: white; color: #374151; font-size: 12px; font-weight: 600;
+      cursor: pointer; transition: all 0.15s;
+      &:hover { border-color: #003B72; color: #003B72; background: #F0F7FF; }
+    }
   `]
 })
 export class ContainersComponent implements OnInit {
@@ -166,6 +188,8 @@ export class ContainersComponent implements OnInit {
   filterStatus = '';
   filterRisk = '';
   showRegister = signal(false);
+  showEdit = signal(false);
+  editingContainer = signal<Container | null>(null);
 
   constructor(private containerService: ContainerService) {}
 
@@ -182,8 +206,23 @@ export class ContainersComponent implements OnInit {
 
   onContainerCreated(c: Container) {
     this.showRegister.set(false);
-    // Add to local list and re-filter
     this.containers.update(prev => [c, ...prev]);
+    this.applyFilters();
+  }
+
+  openEdit(c: Container) {
+    this.editingContainer.set(c);
+    this.showEdit.set(true);
+  }
+
+  closeEdit() {
+    this.showEdit.set(false);
+    this.editingContainer.set(null);
+  }
+
+  onContainerUpdated(updated: Container) {
+    this.closeEdit();
+    this.containers.update(prev => prev.map(c => c.id === updated.id ? updated : c));
     this.applyFilters();
   }
 

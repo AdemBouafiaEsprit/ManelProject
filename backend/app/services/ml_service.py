@@ -26,7 +26,6 @@ def _compute_features(readings: list[SensorReading], container: Container) -> Op
 
     temps = [r.temperature for r in readings if r.temperature is not None]
     powers = [r.power_consumption for r in readings if r.power_consumption is not None]
-    humidities = [r.humidity for r in readings if r.humidity is not None]
 
     if not temps:
         return None
@@ -66,7 +65,6 @@ def _compute_features(readings: list[SensorReading], container: Container) -> Op
         "temp_deviation": temp_deviation,
         "temp_trend": temp_trend,
         "temp_std": temp_std,
-        "humidity_deviation": (np.mean(humidities) - (container.target_humidity or 80)) if humidities else 0,
         "power_anomaly_score": float(power_anomaly),
         "door_open_count": door_opens,
         "compressor_cycles": compressor_cycles,

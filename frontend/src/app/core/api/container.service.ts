@@ -2,7 +2,7 @@ import { Injectable } from '@angular/core';
 import { HttpClient, HttpParams } from '@angular/common/http';
 import { BehaviorSubject, Observable } from 'rxjs';
 import { environment } from '../../../environments/environment';
-import { Container, SensorReading, RiskScore } from '../../shared/models/models';
+import { Container, SensorReading, RiskScore, Alert } from '../../shared/models/models';
 
 @Injectable({ providedIn: 'root' })
 export class ContainerService {
@@ -43,5 +43,13 @@ export class ContainerService {
 
   create(container: any): Observable<Container> {
     return this.http.post<Container>(this.base, container);
+  }
+
+  update(id: string, data: any): Observable<Container> {
+    return this.http.put<Container>(`${this.base}/${id}`, data);
+  }
+
+  reportIncident(id: string, description: string): Observable<Alert> {
+    return this.http.post<Alert>(`${this.base}/${id}/report-incident`, { description });
   }
 }

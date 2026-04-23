@@ -1,3 +1,4 @@
+import math
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
@@ -7,7 +8,8 @@ from app.models.risk_score import RiskScore
 from app.routers.auth import get_current_user
 from app.models.user import User
 from app.models.block import Block
-from app.schemas.schemas import BlockOut, BlockCreate
+from app.schemas.schemas import BlockOut, BlockCreate, BlockEdit
+from typing import List
 
 router = APIRouter(prefix="/map", tags=["Map"])
 
@@ -79,6 +81,26 @@ async def get_layout(db: AsyncSession = Depends(get_db), _: User = Depends(get_c
                 logging.error(f"Pydantic Validation Error for block: {pe}")
                 block_data = b # Fallback
 
+            # Use the actual drawn polygon if stored, otherwise fall back to bounding box rectangle
+            coords = block_data.get("coordinates")
+            if coords and len(coords) >= 3:
+                geometry = {"type": "Polygon", "coordinates": [coords]}
+            else:
+                lat_min = block_data.get("lat_min")
+                lat_max = block_data.get("lat_max")
+                lng_min = block_data.get("lng_min")
+                lng_max = block_data.get("lng_max")
+                geometry = {
+                    "type": "Polygon",
+                    "coordinates": [[
+                        [lng_min, lat_min],
+                        [lng_max, lat_min],
+                        [lng_max, lat_max],
+                        [lng_min, lat_max],
+                        [lng_min, lat_min],
+                    ]]
+                }
+
             features.append({
                 "type": "Feature",
                 "properties": {
@@ -89,16 +111,7 @@ async def get_layout(db: AsyncSession = Depends(get_db), _: User = Depends(get_c
                     "color": block_data.get("color", "#E6F1FB"),
                     "stroke": block_data.get("stroke", "#0369A1"),
                 },
-                "geometry": {
-                    "type": "Polygon",
-                    "coordinates": [[
-                        [block_data.get("lng_min"), block_data.get("lat_min")],
-                        [block_data.get("lng_max"), block_data.get("lat_min")],
-                        [block_data.get("lng_max"), block_data.get("lat_max")],
-                        [block_data.get("lng_min"), block_data.get("lat_max")],
-                        [block_data.get("lng_min"), block_data.get("lat_min")],
-                    ]]
-                }
+                "geometry": geometry,
             })
         return {
             "type": "FeatureCollection",
@@ -109,6 +122,96 @@ async def get_layout(db: AsyncSession = Depends(get_db), _: User = Depends(get_c
     except Exception as e:
         logging.error(f"CRITICAL ERROR in get_layout: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+def _rotated_polygon(lat_min: float, lat_max: float, lng_min: float, lng_max: float, rotation_deg: float) -> list:
+    """Return a closed GeoJSON ring [[lng, lat], ...] for a rectangle rotated around its center."""
+    center_lat = (lat_min + lat_max) / 2
+    center_lng = (lng_min + lng_max) / 2
+    corners = [
+        [lng_min, lat_min], [lng_max, lat_min],
+        [lng_max, lat_max], [lng_min, lat_max],
+        [lng_min, lat_min],
+    ]
+    if rotation_deg == 0:
+        return corners
+    angle = math.radians(rotation_deg)
+    cos_a, sin_a = math.cos(angle), math.sin(angle)
+    cos_lat = math.cos(math.radians(center_lat))
+    rotated = []
+    for lng, lat in corners:
+        dx = (lng - center_lng) * cos_lat
+        dy = lat - center_lat
+        rotated.append([
+            center_lng + (dx * cos_a - dy * sin_a) / cos_lat,
+            center_lat + dx * sin_a + dy * cos_a,
+        ])
+    return rotated
+
+
+@router.get("/blocks", response_model=List[BlockOut])
+async def list_blocks(db: AsyncSession = Depends(get_db), _: User = Depends(get_current_user)):
+    """Return all blocks as structured objects (for management UI)."""
+    result = await db.execute(select(Block))
+    return [BlockOut.model_validate(b) for b in result.scalars().all()]
+
+
+@router.put("/{block_id}", response_model=BlockOut)
+async def update_block(
+    block_id: str,
+    payload: BlockEdit,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    result = await db.execute(select(Block).where(Block.block_id == block_id))
+    block = result.scalar_one_or_none()
+    if not block:
+        raise HTTPException(status_code=404, detail="Block not found")
+
+    for field in ("name", "rows", "bays", "tiers", "color", "stroke"):
+        val = getattr(payload, field)
+        if val is not None:
+            setattr(block, field, val)
+
+    geo_fields = (payload.lat_min, payload.lat_max, payload.lng_min, payload.lng_max, payload.rotation)
+    if any(v is not None for v in geo_fields):
+        lat_min = payload.lat_min if payload.lat_min is not None else block.lat_min
+        lat_max = payload.lat_max if payload.lat_max is not None else block.lat_max
+        lng_min = payload.lng_min if payload.lng_min is not None else block.lng_min
+        lng_max = payload.lng_max if payload.lng_max is not None else block.lng_max
+        rotation = payload.rotation if payload.rotation is not None else (block.rotation or 0.0)
+        block.lat_min = lat_min
+        block.lat_max = lat_max
+        block.lng_min = lng_min
+        block.lng_max = lng_max
+        block.rotation = rotation
+        block.coordinates = _rotated_polygon(lat_min, lat_max, lng_min, lng_max, rotation)
+
+    await db.commit()
+    await db.refresh(block)
+    return BlockOut.model_validate(block)
+
+
+@router.delete("/{block_id}", status_code=204)
+async def delete_block(
+    block_id: str,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    result = await db.execute(select(Block).where(Block.block_id == block_id))
+    block = result.scalar_one_or_none()
+    if not block:
+        raise HTTPException(status_code=404, detail="Block not found")
+
+    occupied = await db.execute(select(Container).where(Container.block == block_id).limit(1))
+    if occupied.scalar_one_or_none():
+        raise HTTPException(
+            status_code=400,
+            detail=f"Block {block_id} still has containers assigned. Reassign or remove them first.",
+        )
+
+    await db.delete(block)
+    await db.commit()
 
 
 @router.post("", response_model=BlockOut, status_code=201)

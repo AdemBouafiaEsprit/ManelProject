@@ -87,7 +87,7 @@ services:
       MQTT_BROKER_PORT: "1883"
       DATABASE_URL: postgresql://reefer_user:reefer_pass@db:5432/reefer_db
       PYTHONDONTWRITEBYTECODE: "1"
-    command: python simulator.py --seed-history --then-realtime
+    command: python simulator.py --realtime-only
 
 volumes:
   pgdata:

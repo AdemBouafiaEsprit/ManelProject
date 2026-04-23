@@ -1,8 +1,9 @@
-import { Component, EventEmitter, OnInit, OnDestroy, Output, signal } from '@angular/core';
+import { Component, EventEmitter, Input, OnInit, OnDestroy, Output, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Subscription } from 'rxjs';
 import { ContainerService } from '../../core/api/container.service';
+import { Container } from '../../shared/models/models';
 
 @Component({
   selector: 'app-register-container',
@@ -13,8 +14,8 @@ import { ContainerService } from '../../core/api/container.service';
       <div class="drawer" (click)="$event.stopPropagation()">
         <div class="drawer-header">
           <div>
-            <h2 class="drawer-title">Register New Container</h2>
-            <p class="drawer-subtitle">Enter container and cargo specifications</p>
+            <h2 class="drawer-title">{{ editContainer ? 'Edit Container' : 'Register New Container' }}</h2>
+            <p class="drawer-subtitle">{{ editContainer ? 'Update container and cargo specifications' : 'Enter container and cargo specifications' }}</p>
           </div>
           <button class="btn-close" (click)="close.emit()">
             <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -28,8 +29,17 @@ import { ContainerService } from '../../core/api/container.service';
             <h3 class="section-title">Identity & Owner</h3>
             <div class="form-group">
               <label>Container Number</label>
-              <input type="text" [(ngModel)]="form.container_number" name="cn" 
-                     placeholder="e.g. MSCU1234567" required />
+              <input type="text" [(ngModel)]="form.container_number" name="cn"
+                     placeholder="e.g. CMAU7821697" required
+                     maxlength="11"
+                     [class.input-error]="cnTouched() && !isValidCN()"
+                     [class.input-ok]="cnTouched() && isValidCN()"
+                     (input)="onCNInput($event)"
+                     (blur)="cnTouched.set(true)" />
+              <div class="cn-hint" [class.cn-hint-error]="cnTouched() && !isValidCN()" [class.cn-hint-ok]="isValidCN()">
+                <span *ngIf="!isValidCN()">4 letters + 7 digits &nbsp;·&nbsp; e.g. CMAU7821697</span>
+                <span *ngIf="isValidCN()">✓ Valid format</span>
+              </div>
             </div>
             <div class="form-group">
               <label>Shipping Line / Owner</label>
@@ -55,6 +65,20 @@ import { ContainerService } from '../../core/api/container.service';
                 <label>Tolerance (°C)</label>
                 <input type="number" [(ngModel)]="form.tolerance" name="tol" step="0.1" />
               </div>
+            </div>
+          </div>
+
+          <div class="form-section" *ngIf="editContainer">
+            <h3 class="section-title">Container Status</h3>
+            <div class="form-group">
+              <label>Status</label>
+              <select [(ngModel)]="form.status" name="status">
+                <option value="active">Active</option>
+                <option value="maintenance">Maintenance</option>
+                <option value="critical">Critical</option>
+                <option value="departed">Departed</option>
+                <option value="offline">Offline</option>
+              </select>
             </div>
           </div>
 
@@ -88,8 +112,8 @@ import { ContainerService } from '../../core/api/container.service';
 
           <div class="drawer-footer">
             <button type="button" class="btn btn-ghost" (click)="close.emit()" [disabled]="saving()">Cancel</button>
-            <button type="submit" class="btn btn-primary" [disabled]="saving()">
-              {{ saving() ? 'Registering...' : 'Register Container' }}
+            <button type="submit" class="btn btn-primary" [disabled]="saving() || !isValidCN()">
+              {{ saving() ? (editContainer ? 'Saving...' : 'Registering...') : (editContainer ? 'Save Changes' : 'Register Container') }}
             </button>
           </div>
         </form>
@@ -136,15 +160,42 @@ import { ContainerService } from '../../core/api/container.service';
       display: flex; gap: 12px; justify-content: flex-end;
     }
     .error-msg { background: #FEF2F2; color: #DC2626; padding: 12px; border-radius: 8px; font-size: 13px; margin-bottom: 16px; }
+
+    input.input-error { border-color: #EF4444 !important; background: #FFF5F5; }
+    input.input-ok    { border-color: #22C55E !important; }
+
+    .cn-hint {
+      font-size: 11px; margin-top: 5px; color: #94A3B8;
+      min-height: 16px;
+    }
+    .cn-hint-error { color: #EF4444; }
+    .cn-hint-ok    { color: #22C55E; font-weight: 600; }
   `]
 })
 export class RegisterContainerComponent implements OnInit, OnDestroy {
+  @Input() editContainer: Container | null = null;
   @Output() close = new EventEmitter<void>();
   @Output() created = new EventEmitter<any>();
 
   saving = signal(false);
   error = signal<string | null>(null);
+  cnTouched = signal(false);
   private subs: Subscription[] = [];
+
+  private readonly CN_PATTERN = /^[A-Z]{4}\d{7}$/;
+
+  isValidCN(): boolean {
+    return this.CN_PATTERN.test(this.form.container_number);
+  }
+
+  onCNInput(e: Event) {
+    const input = e.target as HTMLInputElement;
+    // Force uppercase and strip invalid characters as the user types
+    const upper = input.value.toUpperCase().replace(/[^A-Z0-9]/g, '');
+    this.form.container_number = upper;
+    input.value = upper;
+    this.cnTouched.set(true);
+  }
 
   form = {
     container_number: '',
@@ -152,6 +203,7 @@ export class RegisterContainerComponent implements OnInit, OnDestroy {
     commodity: '',
     target_temp: 4.0,
     tolerance: 1.5,
+    status: 'active',
     block: 'A',
     row_num: 1,
     bay: 1,
@@ -173,11 +225,18 @@ export class RegisterContainerComponent implements OnInit, OnDestroy {
   constructor(private containerService: ContainerService) {}
 
   ngOnInit() {
+    if (this.editContainer) {
+      this.setData(this.editContainer);
+      // Restore actual values — setData's onCommodityChange overwrites them with profile defaults
+      this.form.target_temp = this.editContainer.target_temp;
+      this.form.tolerance = this.editContainer.tolerance;
+      this.cnTouched.set(true);
+    }
     this.subs.push(
       this.containerService.prefill$.subscribe(data => {
         if (data) {
           this.setData(data);
-          this.containerService.setPrefill(null); // Clear it
+          this.containerService.setPrefill(null);
         }
       })
     );
@@ -205,14 +264,18 @@ export class RegisterContainerComponent implements OnInit, OnDestroy {
     this.saving.set(true);
     this.error.set(null);
 
-    this.containerService.create(this.form).subscribe({
+    const obs = this.editContainer
+      ? this.containerService.update(this.editContainer.id, this.form)
+      : this.containerService.create(this.form);
+
+    obs.subscribe({
       next: (res) => {
         this.saving.set(false);
         this.created.emit(res);
       },
       error: (err) => {
         this.saving.set(false);
-        this.error.set(err.error?.detail || 'Failed to register container. Please check fields.');
+        this.error.set(err.error?.detail || 'Failed to save container. Please check fields.');
       }
     });
   }
